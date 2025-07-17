@@ -13,7 +13,10 @@ const JWT_SECRET = 'your_secret_key'; // Заміни на надійний кл
 const app = express();
 const PORT = 5000;
 
-app.use(cors());
+app.use(cors({
+  origin: "https://autocity.infy.uk",
+  credentials: true
+}));
 app.use(bodyParser.json({ limit: '10mb' }));
 
 // DB INIT
