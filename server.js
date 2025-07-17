@@ -11,7 +11,7 @@ const bcrypt = require('bcryptjs');
 const JWT_SECRET = 'your_secret_key'; // Заміни на надійний ключ у продакшені
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 app.use(cors({
   origin: "https://autocity.infy.uk",
