@@ -18,6 +18,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(bodyParser.json({ limit: '10mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // DB INIT
 const db = new sqlite3.Database('sklad.db');
@@ -39,7 +40,9 @@ db.serialize(() => {
     date TEXT,
     customer TEXT,
     template_id INTEGER,
-    total REAL
+    total REAL,
+    status TEXT,
+    discount REAL
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS invoice_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +165,47 @@ app.post('/api/invoices', authMiddleware, (req, res) => {
     });
 });
 
+// Додаю PUT для оновлення/архівування/відновлення накладної з логуванням
+app.put('/api/invoices/:id', authMiddleware, (req, res) => {
+  const { number, type, date, customer, template_id, items, status, discount, ...rest } = req.body;
+  db.get('SELECT * FROM invoices WHERE id=?', [req.params.id], (err, oldInvoice) => {
+    if (err || !oldInvoice) return res.status(404).json({ error: 'Not found' });
+    db.run('UPDATE invoices SET number=?, type=?, date=?, customer=?, template_id=?, total=?, status=?, discount=? WHERE id=?',
+      [number, type, date, customer, template_id, items?.reduce((sum, i) => sum + (i.quantity * i.price), 0) || oldInvoice.total, status || oldInvoice.status, discount ?? oldInvoice.discount, req.params.id],
+      function (err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        db.run('DELETE FROM invoice_items WHERE invoice_id=?', [req.params.id], () => {
+          if (Array.isArray(items)) {
+            const stmt = db.prepare('INSERT INTO invoice_items (invoice_id, product_id, name, unit, quantity, price, sum) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            items.forEach(i => {
+              stmt.run(req.params.id, i.product_id, i.name, i.unit, i.quantity, i.price, i.quantity * i.price);
+            });
+            stmt.finalize();
+          }
+          // Логування дії
+          let action = 'update';
+          if (status && status !== oldInvoice.status) {
+            if (status === 'archived') action = 'archive';
+            if (status === 'active' && oldInvoice.status === 'archived') action = 'restore';
+          }
+          logAction(req.user, action, 'invoice', req.params.id, req.body);
+          res.json({ updated: this.changes });
+        });
+      });
+  });
+});
+
+// Додаю DELETE для видалення накладної з логуванням
+app.delete('/api/invoices/:id', authMiddleware, (req, res) => {
+  db.run('DELETE FROM invoices WHERE id=?', [req.params.id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    db.run('DELETE FROM invoice_items WHERE invoice_id=?', [req.params.id], () => {
+      logAction(req.user, 'delete', 'invoice', req.params.id);
+      res.json({ deleted: this.changes });
+    });
+  });
+});
+
 // TEMPLATES API
 app.get('/api/templates', (req, res) => {
   db.all('SELECT * FROM templates', (err, rows) => {
@@ -279,6 +323,12 @@ app.post('/api/backup/upload', upload.single('dbfile'), (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ status: 'ok' });
   });
+});
+
+app.post('/api/upload', upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Файл не завантажено' });
+  // Повертаємо шлях відносно кореня проекту
+  res.json({ path: `uploads/${req.file.filename}` });
 });
 
 app.listen(PORT, () => {
